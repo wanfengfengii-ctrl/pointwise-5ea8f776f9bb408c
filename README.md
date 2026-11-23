@@ -60,6 +60,6 @@ with closing(open_port('work.sqlite')) as work, closing(open_port('accounts.sqli
 
 `freeze` 返回 `FrozenRevision`。同号同图可以复领，同号异图抛出 `RevisionConflict`。`accept` 返回 `AcceptedBatch`，未知规则号抛出 `UnknownRevision`。标识为非空文本。记录必须含原记录号、冻结起点和非负整数克数，批内原记录号唯一。空记录序列、空值、布尔、负数、非整数及与起点拆分不符的重量均拒绝。合法零克出现保留为明细，也参与封账资格判断。平行边以冻结边序位区分，明细同时保留节点路径和边序路径。
 
-`advance` 按指定批次推进一步，返回执行的 `OccurrenceKey`、交接的 `DeliveryEvent` 或当前无可推进事件时的 `None`。未知批次抛出 `UnknownBatch`。可选的 `pause(event)` 暂缓匹配交接，`lose_ack(event)` 在匹配事件的接收事务提交后引发 `AcknowledgmentLost`，调用方可以重开并续投。事件类型为 `header`、`child`、`return`、`result`、`completion`。批头须先接纳。`None` 表示当前这次调用无法继续推进，是否可领以 `close` 或 `read` 为准。
+`advance` 按指定批次推进一步，返回执行的 `OccurrenceKey`、交接的 `DeliveryEvent` 或当前无可推进事件时的 `None`。未知批次抛出 `UnknownBatch`。可选的 `pause(event)` 暂缓匹配交接，`lose_ack(event)` 在匹配事件的接收事务提交后引发 `AcknowledgmentLost`，调用方可以重开并续投。事件类型为 `header`、`child`、`return`、`result`、`completion`、`return_request`、`return_outcome`。批头须先接纳。`None` 表示当前这次调用无法继续推进，是否可领以 `close` 或 `read` 为准。退料交接优先于普通回流交接，暂停目标回流时仍可办退料；退料的接单、结清与料账规则见 RETURNS.md。
 
 `close(accounts, batch_id)` 返回固定 `Publication` 或 `PendingBatch`。`read` 和 `reprint` 用关键字提供一个查询键。尚无可领快照的批次号返回 `PendingBatch`，包括批头尚未到达档案端时。未知成果号抛出 `UnknownReceipt`。重印返回两行 JSON，依次是固定回执和固定明细账。初始化可重复执行并保留用户数据，不会自动载入样例。`demo.load_sample` 逐批使用正常受理规则，同号异参沿用正常冲突语义。

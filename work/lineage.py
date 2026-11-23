@@ -50,6 +50,40 @@ class RouteOccurrence:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ReturnRequest:
+    batch_id: str
+    request_id: str
+    record_id: str
+    edge_path: tuple[int, ...]
+    verdict: str | None = None
+
+    def token(self):
+        return encode((self.record_id, self.edge_path))
+
+    def to_data(self):
+        return {
+            'batch_id': self.batch_id,
+            'request_id': self.request_id,
+            'record_id': self.record_id,
+            'edge_path': list(self.edge_path),
+        }
+
+    @classmethod
+    def from_data(cls, data, verdict=None):
+        return cls(
+            data['batch_id'], data['request_id'], data['record_id'],
+            tuple(data['edge_path']), verdict,
+        )
+
+    def with_verdict(self, verdict):
+        return ReturnRequest(self.batch_id, self.request_id, self.record_id, self.edge_path, verdict)
+
+
+def subtree_contains(path, cut):
+    return path[:len(cut)] == cut
+
+
 def make_root_occurrence(header, record_index):
     record = header.records[record_index]
     return RouteOccurrence(

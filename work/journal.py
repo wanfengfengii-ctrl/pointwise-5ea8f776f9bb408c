@@ -47,7 +47,9 @@ class WorkJournal:
                 sequence INTEGER PRIMARY KEY,
                 batch_id TEXT NOT NULL REFERENCES intake_batches(batch_id),
                 token TEXT NOT NULL,
-                state TEXT NOT NULL CHECK (state IN ('ready', 'handoff', 'expanded', 'terminal')),
+                state TEXT NOT NULL CHECK (state IN (
+                    'ready', 'handoff', 'expanded', 'terminal', 'returned'
+                )),
                 body TEXT NOT NULL,
                 UNIQUE (batch_id, token)
             )
@@ -56,11 +58,24 @@ class WorkJournal:
             CREATE TABLE IF NOT EXISTS work_deliveries (
                 sequence INTEGER PRIMARY KEY,
                 batch_id TEXT NOT NULL REFERENCES intake_batches(batch_id),
-                kind TEXT NOT NULL CHECK (kind IN ('header', 'child', 'result', 'completion')),
+                kind TEXT NOT NULL CHECK (kind IN (
+                    'header', 'child', 'result', 'completion',
+                    'return_request', 'return_outcome'
+                )),
                 token TEXT NOT NULL,
                 body TEXT NOT NULL,
                 confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1)),
                 UNIQUE (batch_id, kind, token)
+            )
+        ''')
+        self.connection.execute('''
+            CREATE TABLE IF NOT EXISTS work_returns (
+                request_id TEXT PRIMARY KEY NOT NULL,
+                batch_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                edge_path TEXT NOT NULL,
+                verdict TEXT NOT NULL CHECK (verdict IN ('returned', 'denied')),
+                UNIQUE (batch_id, request_id)
             )
         ''')
         self.connection.execute('''
@@ -102,9 +117,68 @@ class WorkJournal:
 
     def save_expansion(self, parent, expansion):
         self._finish_ready(parent, 'expanded')
+        returned_cuts = self.returned_cuts(parent.key.batch_id)
         for child in expansion.children:
+            if any(
+                record_id == child.key.record_id and self._within_cut(child.key.edge_path, cut)
+                for record_id, cut in returned_cuts
+            ):
+                self._add_occurrence(child, 'returned')
+                continue
             self._add_occurrence(child, 'handoff')
             self.stage_delivery(child.key.batch_id, 'child', child.key.token(), child.to_data())
+
+    @staticmethod
+    def _within_cut(edge_path, cut):
+        return edge_path[:len(cut)] == cut
+
+    def returned_cuts(self, batch_id):
+        rows = self.connection.execute('''
+            SELECT record_id, edge_path FROM work_returns
+            WHERE batch_id = ? AND verdict = 'returned'
+        ''', (batch_id,))
+        return set((record_id, tuple(json.loads(edge_path))) for record_id, edge_path in rows)
+
+    def find_return_decision(self, batch_id, request_id):
+        row = self.connection.execute('''
+            SELECT verdict FROM work_returns WHERE batch_id = ? AND request_id = ?
+        ''', (batch_id, request_id)).fetchone()
+        return None if row is None else row[0]
+
+    def save_return_decision(self, request):
+        self.connection.execute('''
+            INSERT INTO work_returns (request_id, batch_id, record_id, edge_path, verdict)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            request.request_id, request.batch_id, request.record_id,
+            encode(list(request.edge_path)), request.verdict,
+        ))
+
+    def mark_subtree_returned(self, batch_id, record_id, cut):
+        rows = self.connection.execute('''
+            SELECT token, state, body FROM work_occurrences WHERE batch_id = ?
+        ''', (batch_id,)).fetchall()
+        for token, state, body in rows:
+            key = OccurrenceKey.from_token(batch_id, token)
+            if key.record_id != record_id or not self._within_cut(key.edge_path, cut):
+                continue
+            if state == 'terminal':
+                raise SourceError('退料范围与已提交终点冲突')
+            if state in ('ready', 'handoff'):
+                self.connection.execute('''
+                    UPDATE work_occurrences SET state = 'returned'
+                    WHERE batch_id = ? AND token = ? AND state IN ('ready', 'handoff')
+                ''', (batch_id, token))
+
+    def stage_return_outcome(self, request):
+        payload = {
+            'request_id': request.request_id,
+            'batch_id': request.batch_id,
+            'record_id': request.record_id,
+            'edge_path': list(request.edge_path),
+            'verdict': request.verdict,
+        }
+        self.stage_delivery(request.batch_id, 'return_outcome', request.token(), payload)
 
     def save_terminal_result(self, result):
         occurrence = result.occurrence
@@ -124,11 +198,20 @@ class WorkJournal:
             self.connection.execute('''
                 UPDATE work_occurrences SET state = 'ready' WHERE batch_id = ? AND token = ?
             ''', address)
+        # 'returned' 待办保持退料资格失效：迟到回流不能恢复执行。
 
     def stage_delivery(self, batch_id, kind, token, payload):
         self.connection.execute('''
             INSERT INTO work_deliveries (batch_id, kind, token, body) VALUES (?, ?, ?, ?)
         ''', (batch_id, kind, token, encode(payload)))
+
+    def stage_completion_if_absent(self, batch_id, fact):
+        exists = self.connection.execute('''
+            SELECT 1 FROM work_deliveries
+            WHERE batch_id = ? AND kind = 'completion' AND token = ''
+        ''', (batch_id,)).fetchone()
+        if exists is None:
+            self.stage_delivery(batch_id, 'completion', '', fact.to_data())
 
     def pending_deliveries(self, batch_id):
         rows = self.connection.execute('''
@@ -156,7 +239,6 @@ class WorkJournal:
             if state == 'terminal':
                 terminal_keys.append(OccurrenceKey.from_token(batch_id, token))
         return tuple(sorted(terminal_keys)) if terminal_keys else None
-
 
 class RelayJournal:
     def __init__(self, connection):

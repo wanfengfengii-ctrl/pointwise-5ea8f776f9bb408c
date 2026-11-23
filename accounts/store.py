@@ -14,6 +14,7 @@ class AccountCloseView:
     results: tuple[TerminalResult, ...]
     completion: CompletionFact | None
     receipt_id: str | None
+    return_record: object | None = None
 
 
 class AccountStore:
@@ -121,11 +122,14 @@ class AccountStore:
         if facts is None:
             return None
         header, completion, receipt_id = facts
+        from accounts.returns import ReturnStore
+        return_record = ReturnStore(self.connection).find_by_batch(batch_id)
         return AccountCloseView(
             BatchHeader.from_data(json.loads(header)),
             tuple(TerminalResult.from_data(json.loads(body)) for _, body in self._result_rows(batch_id)),
             None if completion is None else CompletionFact.from_data(json.loads(completion)),
             receipt_id,
+            return_record,
         )
 
     def mark_closed(self, batch_id, receipt_id):

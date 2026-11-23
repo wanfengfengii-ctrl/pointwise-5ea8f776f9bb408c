@@ -4,7 +4,7 @@ from intake.store import acceptance_number
 from ports import transaction
 from rules.routes import require_name
 from rules.validation import validate_revision
-from work.lineage import SourceError, resolve_path
+from work.lineage import SourceError, resolve_path, subtree_contains
 from work.transform import validate_terminal_result
 
 
@@ -22,11 +22,20 @@ def accept_batch_header(connection, header):
         AccountStore(connection).register_batch(header)
 
 
+def _reject_overlapping_return(connection, key):
+    from accounts.returns import RETURNED, ReturnStore
+    record = ReturnStore(connection).find_by_batch(key.batch_id)
+    if record is not None and record.status == RETURNED:
+        if key.record_id == record.record_id and subtree_contains(key.edge_path, record.edge_path):
+            raise SourceError('普通终点与已确认退料截点重叠')
+
+
 def accept_result(connection, result):
     store = AccountStore(connection)
     with transaction(connection):
         header = store.require_header(result.occurrence.key.batch_id)
         validate_terminal_result(result, header)
+        _reject_overlapping_return(connection, result.occurrence.key)
         inserted = store.insert_result(result)
     return inserted
 
