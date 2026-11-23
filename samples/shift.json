@@ -1,0 +1,12 @@
+{
+  "revision_id": "shift-1",
+  "graph": {
+    "nodes": ["S", "L", "R", "D"],
+    "edges": [["S", "L", 5], ["S", "R", 7], ["L", "D", 5], ["R", "D", 7]],
+    "terminals": [["D", "D"]]
+  },
+  "batches": [
+    {"batch_id": "day-012", "records": [{"record_id": "sample-12", "start": "S", "grams": 12}]},
+    {"batch_id": "day-ready", "records": [{"record_id": "sample-3", "start": "D", "grams": 3}]}
+  ]
+}
